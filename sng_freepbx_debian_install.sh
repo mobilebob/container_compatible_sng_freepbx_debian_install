@@ -110,13 +110,8 @@ exec 2>>"${LOG_FILE}"
 
 #Comparing version
 compare_version() {
-    if dpkg --compare-versions "$1" "gt" "$2"; then
-            result=0
-    elif dpkg --compare-versions "$1" "lt" "$2"; then
-            result=1
-    else
-            result=2
-    fi
+    # Skipped in Docker environment
+    echo "Skipping version compare in Docker environment"
 }
 
 check_version() {
@@ -173,7 +168,7 @@ pkg_install() {
         log "$PKG already present ...."
     else
         message "Installing $PKG ...."
-        apt-get -y --ignore-missing -o DPkg::Options::="--force-confnew" -o Dpkg::Options::="--force-overwrite" install $PKG >> $log
+        apt-get -y --ignore-missing -o Dpkg::Options::="--force-confnew" -o Dpkg::Options::="--force-overwrite" install $PKG >> $log
         if isinstalled $PKG; then
             message "$PKG installed successfully...."
         else
@@ -223,30 +218,38 @@ install_asterisk() {
 }
 
 setup_repositories() {
-    apt-key del "9641 7C6E 0423 6E0A 986B  69EF DE82 7447 3C8D 0E52" >> "$log"
+    # Remove old GPG key if it exists
+    apt-key del "9641 7C6E 0423 6E0A 986B 69EF DE82 7447 3C8D 0E52" >> "$log" || true
 
-    wget -O - http://deb.freepbx.org/gpg/aptly-pubkey.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/freepbx.gpg  >> "$log"
+    # Import the GPG key for the FreePBX repository
+    wget -O - http://deb.freepbx.org/gpg/aptly-pubkey.asc | gpg --dearmor -o /usr/share/keyrings/freepbx-archive-keyring.gpg >> "$log"
 
-    # Setting our default repo server
-    if [ $testrepo ] ; then
-        add-apt-repository -y -S "deb [ arch=amd64 ] http://deb.freepbx.org/freepbx17-dev bookworm main" >> "$log"
+    # Determine which repository to use
+    if [ "$testrepo" ]; then
+        REPO_URL="http://deb.freepbx.org/freepbx17-dev"
     else
-        add-apt-repository -y -S "deb [ arch=amd64 ] http://deb.freepbx.org/freepbx17-prod bookworm main" >> "$log"
+        REPO_URL="http://deb.freepbx.org/freepbx17-prod"
     fi
 
-    if [ ! $noaac ] ; then
-        add-apt-repository -y -S "deb $DEBIAN_MIRROR stable main non-free non-free-firmware" >> "$log"
+    # Add the FreePBX repository directly to sources.list.d
+    echo "deb [signed-by=/usr/share/keyrings/freepbx-archive-keyring.gpg arch=amd64] $REPO_URL bookworm main" > /etc/apt/sources.list.d/freepbx.list
+
+    # If not skipping AAC, add the Debian non-free repository
+    if [ ! "$noaac" ]; then
+        echo "deb $DEBIAN_MIRROR stable main non-free non-free-firmware" > /etc/apt/sources.list.d/debian-non-free.list
     fi
 
     setCurrentStep "Setting up Sangoma repository"
+
     local aptpref="/etc/apt/preferences.d/99sangoma-fpbx-repository"
     cat <<EOF> $aptpref
 Package: *
 Pin: origin deb.freepbx.org
 Pin-Priority: ${MIRROR_PRIO}
 EOF
-    if [ $noaac ]; then
-    cat <<EOF>> $aptpref
+
+    if [ "$noaac" ]; then
+        cat <<EOF>> $aptpref
 
 Package: ffmpeg
 Pin: origin deb.freepbx.org
@@ -255,15 +258,16 @@ EOF
     fi
 }
 
-# Functions specific to systemd and services are omitted or adjusted for Docker
-create_post_apt_script() {
-    # Skipped in Docker environment
-    echo "Skipping creation of post-apt script in Docker environment"
-}
-
-check_kernel_compatibility() {
-    # Skipped in Docker environment
-    echo "Skipping kernel compatibility check in Docker environment"
+# Create a dummy systemctl script
+create_dummy_systemctl() {
+    if [ ! -e /usr/bin/systemctl ]; then
+        cat << EOF > /usr/bin/systemctl
+#!/bin/bash
+echo "Warning: systemctl command is not available in this Docker container."
+exit 0
+EOF
+        chmod +x /usr/bin/systemctl
+    fi
 }
 
 refresh_signatures() {
@@ -304,15 +308,6 @@ verify_module_status() {
     fi
 }
 
-# Skipping network port inspection and process inspection functions
-inspect_network_ports() {
-    echo "Skipping network port inspection in Docker environment"
-}
-
-inspect_running_processes() {
-    echo "Skipping process inspection in Docker environment"
-}
-
 check_freepbx() {
      # Check if FreePBX is installed
     if ! dpkg -l | grep -q 'freepbx'; then
@@ -320,9 +315,9 @@ check_freepbx() {
     else
         verify_module_status
         if [ ! $opensourceonly ] ; then
-            inspect_network_ports
+            echo "Skipping network port inspection in Docker environment"
         fi
-        inspect_running_processes
+        echo "Skipping process inspection in Docker environment"
         inspect_job_status=$(fwconsole job --list)
         message "Job list : $inspect_job_status"
     fi
@@ -359,7 +354,7 @@ check_asterisk() {
 }
 
 hold_packages() {
-    # Skipping package holding in Docker environment
+    # Skipping package hold in Docker environment
     echo "Skipping package hold in Docker environment"
 }
 
@@ -444,6 +439,9 @@ echo "postfix postfix/main_mailer_type string 'Internet Site'" | debconf-set-sel
 pkg_install software-properties-common
 pkg_install gnupg
 
+setCurrentStep "Creating dummy systemctl"
+create_dummy_systemctl
+
 setCurrentStep "Setting up repositories"
 setup_repositories
 
@@ -458,7 +456,7 @@ message " Ensure you are running a DAHDI supported Kernel. Current latest suppor
 
 if [ $dahdi ]; then
     setCurrentStep "Making sure we allow only proper kernel upgrade and version installation"
-    check_kernel_compatibility "$kernel_version"
+    echo "Skipping kernel compatibility check in Docker environment"
 fi
 
 setCurrentStep "Updating repository"
@@ -466,9 +464,6 @@ apt-get update >> $log
 
 # log the apt-cache policy
 apt-cache policy  >> $log
-
-# Don't start the tftp & chrony daemons automatically, as we need to change their configuration
-# Skipping masking and unmasking services in Docker environment
 
 # Install dependent packages
 setCurrentStep "Installing required packages"
@@ -605,7 +600,7 @@ if  dpkg -l | grep -q 'postfix'; then
 
     sed -i "s/^inet_interfaces\s*=.*/inet_interfaces = 127.0.0.1/" /etc/postfix/main.cf
 
-    # systemctl restart postfix
+    # Restart postfix
     service postfix restart
 fi
 
@@ -759,7 +754,6 @@ EOF
 if [ $noast ] ; then
     message "Skipping Asterisk installation due to noasterisk option"
 else
-    # TODO Need to check if asterisk installed already then remove that and install new ones.
     # Install Asterisk 21
     setCurrentStep "Installing Asterisk packages."
     install_asterisk $ASTVERSION
@@ -892,7 +886,7 @@ fi
 chown -R asterisk:asterisk /var/www/html/
 
 #Creating post apt scripts
-create_post_apt_script
+echo "Skipping creation of post-apt script in Docker environment"
 
 # Refresh signatures
 setCurrentStep "Refreshing modules signatures."
