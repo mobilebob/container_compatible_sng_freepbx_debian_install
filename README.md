@@ -1,4 +1,4 @@
-2024-02-20 Version 1.0 is in BETA and for testing only. Not suitable for production systems.
+2024-10-17  This is an attempt at making code changes to make the script compadible with Docker Containers.  It does NOT currently function and most code is written by Chat GPT so should not be relied apon.
 
 ```
  ______             _____  ______   __
