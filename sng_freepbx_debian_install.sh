@@ -223,30 +223,38 @@ install_asterisk() {
 }
 
 setup_repositories() {
-    apt-key del "9641 7C6E 0423 6E0A 986B  69EF DE82 7447 3C8D 0E52" >> "$log"
+    # Remove old GPG key if it exists
+    apt-key del "9641 7C6E 0423 6E0A 986B 69EF DE82 7447 3C8D 0E52" >> "$log" || true
 
-    wget -O - http://deb.freepbx.org/gpg/aptly-pubkey.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/freepbx.gpg  >> "$log"
+    # Import the GPG key for the FreePBX repository
+    wget -O - http://deb.freepbx.org/gpg/aptly-pubkey.asc | gpg --dearmor -o /usr/share/keyrings/freepbx-archive-keyring.gpg >> "$log"
 
-    # Setting our default repo server
-    if [ $testrepo ] ; then
-        add-apt-repository -y -S "deb [ arch=amd64 ] http://deb.freepbx.org/freepbx17-dev bookworm main" >> "$log"
+    # Determine which repository to use
+    if [ "$testrepo" ]; then
+        REPO_URL="http://deb.freepbx.org/freepbx17-dev"
     else
-        add-apt-repository -y -S "deb [ arch=amd64 ] http://deb.freepbx.org/freepbx17-prod bookworm main" >> "$log"
+        REPO_URL="http://deb.freepbx.org/freepbx17-prod"
     fi
 
-    if [ ! $noaac ] ; then
-        add-apt-repository -y -S "deb $DEBIAN_MIRROR stable main non-free non-free-firmware" >> "$log"
+    # Add the FreePBX repository directly to sources.list.d
+    echo "deb [signed-by=/usr/share/keyrings/freepbx-archive-keyring.gpg arch=amd64] $REPO_URL bookworm main" > /etc/apt/sources.list.d/freepbx.list
+
+    # If not skipping AAC, add the Debian non-free repository
+    if [ ! "$noaac" ]; then
+        echo "deb $DEBIAN_MIRROR stable main non-free non-free-firmware" > /etc/apt/sources.list.d/debian-non-free.list
     fi
 
     setCurrentStep "Setting up Sangoma repository"
+
     local aptpref="/etc/apt/preferences.d/99sangoma-fpbx-repository"
     cat <<EOF> $aptpref
 Package: *
 Pin: origin deb.freepbx.org
 Pin-Priority: ${MIRROR_PRIO}
 EOF
-    if [ $noaac ]; then
-    cat <<EOF>> $aptpref
+
+    if [ "$noaac" ]; then
+        cat <<EOF>> $aptpref
 
 Package: ffmpeg
 Pin: origin deb.freepbx.org
